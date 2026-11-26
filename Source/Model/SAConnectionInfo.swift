@@ -8,15 +8,33 @@
 
 import Foundation
 
-// MARK: - Connection Type
+// MARK: - Connection Type (Legacy)
 
 /// Mirrors SPConnectionType from SPConstants.h for Swift usage.
+/// Kept for backward compatibility with favorites plists, `.spf` files, and legacy ObjC callers.
+/// Prefer `SAConnectionMethod` + `SAAuthMethod` for new code.
 @objc enum SAConnectionType: Int {
     case tcpIP = 0
     case socket = 1
     case sshTunnel = 2
     case awsIAM = 3
     case vault = 4
+}
+
+// MARK: - Connection Method & Authentication Method
+
+/// Transport layer: how Sequel Ace reaches the MySQL server.
+@objc enum SAConnectionMethod: Int, CaseIterable, Hashable {
+    case tcpIP = 0
+    case socket = 1
+    case sshTunnel = 2
+}
+
+/// Authentication layer: how Sequel Ace authenticates to the MySQL server.
+@objc enum SAAuthMethod: Int, CaseIterable, Hashable {
+    case password = 0
+    case awsIAM = 1
+    case vault = 2
 }
 
 // MARK: - Time Zone Mode
@@ -36,7 +54,77 @@ struct SAConnectionInfo {
 
     // MARK: Basic Connection
 
-    var type: SAConnectionType = .tcpIP
+    var connectionMethod: SAConnectionMethod = .tcpIP
+    var authMethod: SAAuthMethod = .password
+
+    /// Legacy unified connection type, derived from `(connectionMethod, authMethod)`.
+    ///
+    /// Reading maps:
+    /// - `(.tcpIP, .password)`   → `.tcpIP`
+    /// - `(.tcpIP, .awsIAM)`     → `.awsIAM`
+    /// - `(.tcpIP, .vault)`      → `.vault`
+    /// - `(.socket, _)`          → `.socket`
+    /// - `(.sshTunnel, _)`       → `.sshTunnel`
+    ///
+    /// Writing sets both `connectionMethod` and `authMethod` to the matching
+    /// legacy pair and keeps `useAWSIAMAuth` in sync.
+    var type: SAConnectionType {
+        get {
+            switch connectionMethod {
+            case .socket:
+                return .socket
+            case .sshTunnel:
+                return .sshTunnel
+            case .tcpIP:
+                switch authMethod {
+                case .password: return .tcpIP
+                case .awsIAM: return .awsIAM
+                case .vault: return .vault
+                }
+            }
+        }
+        set {
+            switch newValue {
+            case .tcpIP:
+                connectionMethod = .tcpIP
+                authMethod = .password
+                useAWSIAMAuth = 0
+            case .socket:
+                connectionMethod = .socket
+                authMethod = .password
+                useAWSIAMAuth = 0
+            case .sshTunnel:
+                connectionMethod = .sshTunnel
+                authMethod = .password
+                useAWSIAMAuth = 0
+            case .awsIAM:
+                connectionMethod = .tcpIP
+                authMethod = .awsIAM
+                useAWSIAMAuth = 1
+            case .vault:
+                connectionMethod = .tcpIP
+                authMethod = .vault
+                useAWSIAMAuth = 0
+            }
+        }
+    }
+
+    var usesSSHTunnel: Bool { connectionMethod == .sshTunnel }
+    var usesAWSIAMAuth: Bool { authMethod == .awsIAM }
+    var usesVaultAuth: Bool { authMethod == .vault }
+
+    /// Authentication methods supported for a given transport method.
+    /// Local Unix sockets only support standard password authentication;
+    /// TCP/IP and SSH Tunnel support Password, AWS IAM, and Vault.
+    static func availableAuthMethods(for connectionMethod: SAConnectionMethod) -> [SAAuthMethod] {
+        switch connectionMethod {
+        case .socket:
+            return [.password]
+        case .tcpIP, .sshTunnel:
+            return [.password, .awsIAM, .vault]
+        }
+    }
+
     var name: String = ""
     var host: String = ""
     var user: String = ""
@@ -140,7 +228,7 @@ struct SAConnectionInfo {
         let normalizedHost = trimmedHost.lowercased()
         let fallbackHost = trimmedHost.isEmpty ? "127.0.0.1" : trimmedHost
 
-        switch info.type {
+        switch info.connectionMethod {
         case .socket:
             return nil
 
@@ -155,17 +243,15 @@ struct SAConnectionInfo {
             }
             return "127.0.0.1"
 
-        case .tcpIP, .awsIAM, .vault:
-            return fallbackHost
-
-        @unknown default:
+        case .tcpIP:
             return fallbackHost
         }
     }
 
     /// Returns whether SPMySQLConnection should request the saved password from its delegate.
     /// AWS IAM auth tokens expire 15 minutes after they are generated, so they are always
-    /// requested per connection attempt rather than stored on the connection.
+    /// requested per connection attempt rather than stored on the connection — including
+    /// when combined with an SSH tunnel.
     @objc(shouldDeferMySQLPasswordToDelegateForInfo:password:delegateAvailable:)
     class func shouldDeferMySQLPasswordToDelegate(
         for info: SAConnectionInfoObjC,
@@ -176,18 +262,32 @@ struct SAConnectionInfo {
             return false
         }
 
-        switch info.type {
+        switch info.authMethod {
         case .awsIAM:
             return true
         case .vault:
             return false
-        case .tcpIP, .socket, .sshTunnel:
+        case .password:
             return !info.connectionKeychainItemName.isEmpty
                 && password == keychainPasswordPlaceholder
         }
     }
 
     // MARK: Basic Connection
+
+    @objc var connectionMethod: SAConnectionMethod {
+        get { info.connectionMethod }
+        set { info.connectionMethod = newValue }
+    }
+
+    @objc var authMethod: SAAuthMethod {
+        get { info.authMethod }
+        set { info.authMethod = newValue }
+    }
+
+    @objc var usesSSHTunnel: Bool { info.usesSSHTunnel }
+    @objc var usesAWSIAMAuth: Bool { info.usesAWSIAMAuth }
+    @objc var usesVaultAuth: Bool { info.usesVaultAuth }
 
     @objc var type: SAConnectionType {
         get { info.type }

@@ -4490,3 +4490,36 @@
 
 /* Preferences : General : default export format option */
 "Dot" = "Dot";
+
+/* connection view : connection method dropdown label */
+"Connection Method" = "Connection Method";
+
+/* connection view : authentication method dropdown label */
+"Authentication" = "Authentication";
+
+/* auth method : username and password */
+"Username & Password" = "Username & Password";
+
+/* connection view : aws directory authorization prompt */
+"Authorize access to your ~/.aws directory to select an AWS profile." = "Authorize access to your ~/.aws directory to select an AWS profile.";
+
+/* connection view : authorize aws directory button */
+"Authorize ~/.aws Directory…" = "Authorize ~/.aws Directory…";
+
+/* connection view : aws region auto-detect placeholder */
+"Auto-detect from hostname" = "Auto-detect from hostname";
+
+/* connection view : aws region auto-detect menu item */
+"Auto-detect" = "Auto-detect";
+
+/* connection view : help button tooltip */
+"Show Help" = "Show Help";
+
+/* connection view : add to favorites button */
+"Add to Favorites" = "Add to Favorites";
+
+/* connection view : save changes button */
+"Save Changes" = "Save Changes";
+
+/* connection view : test connection button */
+"Test Connection" = "Test Connection";

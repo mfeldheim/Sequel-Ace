@@ -42,6 +42,8 @@
 @class SAFavoritesListDataSource;
 @class SAConnectionService;
 @class SAVaultRoleListController;
+@class SAConnectionFormBridge;
+@class SAConnectionInfoObjC;
 
 @class SPDatabaseDocument,
 	   SPFavoritesController,
@@ -271,7 +273,9 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
 @property (readwrite, strong) SAConnectionViewCoordinator *viewCoordinator;
 @property (readwrite, strong) SAFavoritesListDataSource *favoritesListDataSource;
 @property (readwrite, strong) SAConnectionService *connectionService;
+@property (readwrite, strong) SAConnectionFormBridge *formBridge;
 @property (readwrite) NSInteger type;
+@property (readwrite) NSInteger authMethod;
 @property (readwrite, copy) NSString *name;
 @property (readwrite, copy) NSString *host;
 @property (readwrite, copy) NSString *user;
@@ -331,6 +335,14 @@ typedef NS_ENUM(NSInteger, SPConnectionTimeZoneMode) {
  */
 - (NSString *)passwordForConnectionRequestForConnection:(SPMySQLConnection *)connection;
 - (nullable NSError *)lastAWSIAMTokenErrorForConnection:(SPMySQLConnection *)connection;
+
+- (BOOL)usesSSHTunnel;
+- (BOOL)usesAWSIAMAuth;
+- (BOOL)usesVaultAuth;
+- (void)initiateConnectionFromFormIsTesting:(BOOL)isTesting;
+- (void)startEditingConnectionFromForm;
+- (void)applyFormInfo:(SAConnectionInfoObjC *)info;
+- (void)syncFormFromController;
 
 // Connection processes
 - (IBAction)initiateConnection:(id)sender;

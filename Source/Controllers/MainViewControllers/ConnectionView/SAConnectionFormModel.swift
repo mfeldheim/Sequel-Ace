@@ -254,6 +254,37 @@ final class SAConnectionFormModel: ObservableObject {
         load(favorite: nil)
     }
 
+    // MARK: - Connection & Authentication Methods
+
+    /// Transport method (TCP/IP, Socket, SSH Tunnel).
+    /// Switching to Socket automatically resets authentication to Password since
+    /// local Unix sockets do not support AWS IAM or Vault.
+    var connectionMethod: SAConnectionMethod {
+        get { info.connectionMethod }
+        set {
+            guard info.connectionMethod != newValue else { return }
+            info.connectionMethod = newValue
+            if newValue == .socket && info.authMethod != .password {
+                info.authMethod = .password
+            }
+        }
+    }
+
+    /// Authentication method (Password, AWS IAM, Vault).
+    var authMethod: SAAuthMethod {
+        get { info.authMethod }
+        set {
+            let clamped: SAAuthMethod = (info.connectionMethod == .socket) ? .password : newValue
+            guard info.authMethod != clamped else { return }
+            info.authMethod = clamped
+        }
+    }
+
+    /// Auth methods valid for the currently selected connection method.
+    var availableAuthMethods: [SAAuthMethod] {
+        SAConnectionInfo.availableAuthMethods(for: info.connectionMethod)
+    }
+
     // MARK: - Derived display values
 
     /// The name shown for this connection: the user-entered name when
@@ -272,7 +303,8 @@ final class SAConnectionFormModel: ObservableObject {
     /// enough to build one. Vault names come from the Vault endpoint and role
     /// rather than the database host.
     var generatedName: String? {
-        SAConnectionFormHelpers.generateName(type: info.type,
+        SAConnectionFormHelpers.generateName(connectionMethod: info.connectionMethod,
+                                             authMethod: info.authMethod,
                                              host: info.host,
                                              database: info.database,
                                              vaultHost: info.vaultHost,
@@ -282,25 +314,29 @@ final class SAConnectionFormModel: ObservableObject {
     /// True when the form has the minimum input to attempt a connection
     /// (used to enable the Connect button before full validation runs).
     /// Mirrors the host rule in SAConnectionDetailsValidator: an SSH
-    /// tunnel that targets a remote socket path doesn't need a MySQL
-    /// host (SAConnectionService connects through the socket instead).
+    /// tunnel with password auth that targets a remote socket path doesn't
+    /// need a MySQL host (SAConnectionService connects through the socket instead).
     var canAttemptConnection: Bool {
         let hasHost = !info.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        switch info.type {
-        case .socket:
-            return true
-        case .sshTunnel:
-            let hasRemoteSocket = !info.sshRemoteSocketPath
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasHost || hasRemoteSocket
-        case .tcpIP, .awsIAM:
-            return hasHost
-        case .vault:
+
+        if info.authMethod == .vault {
             // Vault needs its own endpoint and a credentials path on top of the
             // database host — `-initiateConnection:` rejects all three.
             return hasHost
                 && !info.vaultHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !info.vaultCredentialsPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        switch info.connectionMethod {
+        case .socket:
+            return true
+        case .sshTunnel:
+            let hasRemoteSocket = info.authMethod == .password
+                && !info.sshRemoteSocketPath
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasHost || hasRemoteSocket
+        case .tcpIP:
+            return hasHost
         }
     }
 
@@ -374,12 +410,11 @@ final class SAConnectionFormModel: ObservableObject {
 
     // MARK: - Per-type form shape
 
-    /// AWS IAM turns SSL and the cleartext plugin on itself, so its tab
-    /// shows neither toggle — it shows a static explanatory label instead
-    /// (see `awsIAMConnectionFormContainer` in ConnectionView.xib, which
-    /// is also the only tab with no SSL details container).
+    /// AWS IAM turns SSL and the cleartext plugin on itself, so its form
+    /// shows neither toggle — it shows a static explanatory label instead,
+    /// whether connecting directly over TCP/IP or through an SSH tunnel.
     var forcesSSL: Bool {
-        info.type == .awsIAM
+        info.authMethod == .awsIAM
     }
 
     /// Whether the "Require SSL" toggle is offered at all.
@@ -388,42 +423,44 @@ final class SAConnectionFormModel: ObservableObject {
     }
 
     /// Whether the three SSL file pickers (key / certificate / CA cert)
-    /// are visible. The XIB reveals that container only while the type's
-    /// SSL toggle is on, and never for AWS IAM.
+    /// are visible.
     var showsSSLFileOptions: Bool {
         showsSSLToggle && useSSL
     }
 
-    /// The cleartext-plugin toggle is likewise absent from the AWS tab.
+    /// The cleartext-plugin toggle is likewise absent for AWS IAM.
     var showsClearTextPluginToggle: Bool {
         !forcesSSL
     }
 
-    /// "Get Public Key" is offered on every tab except AWS IAM.
+    /// "Get Public Key" is offered for every auth method except AWS IAM.
     var showsRequestServerPublicKeyToggle: Bool {
         !forcesSSL
     }
 
+    /// Remote Socket forwarding is only applicable for SSH tunnels using
+    /// standard password auth (AWS IAM and Vault require a TCP database host).
+    var showsRemoteSocketField: Bool {
+        info.connectionMethod == .sshTunnel && info.authMethod == .password
+    }
+
     // MARK: - Type changes
 
-    /// Keeps the flags a type switch derives in step with the type.
+    /// Keeps derived flags in step whenever `connectionMethod` or `authMethod` changes.
     ///
-    /// `-_favoriteTypeDidChange` sets `useAWSIAMAuth` from the type, and
-    /// `-_syncAWSIAMAndSSLInterfaceState` clears the manual SSL flag for IAM,
-    /// which always uses TLS internally. Binding the picker straight to
-    /// `info.type` skipped both, so enabling Require SSL on TCP/IP, visiting
-    /// AWS IAM and coming back left `useSSL` set with the toggle hidden — and
-    /// `useAWSIAMAuth` stale in the bridged info.
-    ///
-    /// Also run on a wholesale replace: the AppKit form re-syncs after a
-    /// favorite is selected too, so a stored favorite whose flags disagree
-    /// with its type is normalized the same way in both forms. Every write is
-    /// guarded by a difference check, so the nested `didSet` a write triggers
-    /// no-ops instead of recursing.
+    /// Also run on a wholesale replace so a stored favorite whose flags disagree
+    /// with its auth method is normalized consistently. Every write is guarded by
+    /// a difference check, so nested `didSet` calls no-op instead of recursing.
     private func syncTypeDerivedState(from previous: SAConnectionInfo) {
-        guard info.type != previous.type || isReplacingInfo else { return }
+        guard info.connectionMethod != previous.connectionMethod
+                || info.authMethod != previous.authMethod
+                || isReplacingInfo else { return }
 
-        let isIAM = info.type == .awsIAM
+        if info.connectionMethod == .socket && info.authMethod != .password {
+            info.authMethod = .password
+        }
+
+        let isIAM = info.authMethod == .awsIAM
         if (info.useAWSIAMAuth != 0) != isIAM {
             info.useAWSIAMAuth = isIAM ? 1 : 0
         }
@@ -477,7 +514,8 @@ final class SAConnectionFormModel: ObservableObject {
         }
 
         return SAConnectionDetailsValidator.validate(
-            type: info.type,
+            connectionMethod: info.connectionMethod,
+            authMethod: info.authMethod,
             host: info.host,
             sshHost: info.sshHost,
             sshRemoteSocketPath: info.sshRemoteSocketPath,
@@ -499,7 +537,7 @@ final class SAConnectionFormModel: ObservableObject {
     /// controller, which still runs these itself; duplicating them there would
     /// double the alert.
     private func validateVaultDetails() -> SAConnectionValidationFailure? {
-        guard info.type == .vault else { return nil }
+        guard info.authMethod == .vault else { return nil }
 
         let title = NSLocalizedString("Insufficient connection details",
                                       comment: "insufficient details message")

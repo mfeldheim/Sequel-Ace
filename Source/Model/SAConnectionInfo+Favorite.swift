@@ -35,6 +35,7 @@ import Foundation
 private enum FavoriteKey {
     static let id = "id"
     static let type = "type"
+    static let authMethod = "authMethod"
     static let name = "name"
     static let useAWSIAMAuth = "useAWSIAMAuth"
     static let host = "host"
@@ -108,10 +109,37 @@ extension SAConnectionInfo {
         let fav = favorite ?? [:]
         var info = SAConnectionInfo()
 
-        // Connection type: unknown raw values fall back to TCP/IP (the
-        // historical default for a missing key).
+        // Connection method & authentication method:
+        // Legacy favorites only store `type` (0=TCP/IP, 1=Socket, 2=SSH, 3=AWS IAM, 4=Vault).
+        // Newer favorites also store `authMethod` (0=Password, 1=AWS IAM, 2=Vault) so
+        // SSH Tunnel can be combined with AWS IAM or Vault while keeping `type` backward-compatible.
         let rawType = intValue(fav[FavoriteKey.type], default: SAConnectionType.tcpIP.rawValue)
-        info.type = SAConnectionType(rawValue: rawType) ?? .tcpIP
+        let legacyType = SAConnectionType(rawValue: rawType) ?? .tcpIP
+        switch legacyType {
+        case .socket:
+            info.connectionMethod = .socket
+        case .sshTunnel:
+            info.connectionMethod = .sshTunnel
+        case .tcpIP, .awsIAM, .vault:
+            info.connectionMethod = .tcpIP
+        }
+
+        if let rawAuth = fav[FavoriteKey.authMethod],
+           let parsedAuth = SAAuthMethod(rawValue: intValue(rawAuth, default: -1)) {
+            info.authMethod = parsedAuth
+        } else if legacyType == .awsIAM
+                    || (legacyType == .sshTunnel && intValue(fav[FavoriteKey.useAWSIAMAuth], default: 0) != 0) {
+            info.authMethod = .awsIAM
+        } else if legacyType == .vault {
+            info.authMethod = .vault
+        } else {
+            info.authMethod = .password
+        }
+
+        // Local Unix sockets only support standard password authentication.
+        if info.connectionMethod == .socket {
+            info.authMethod = .password
+        }
 
         // Standard details
         info.name = stringValue(fav[FavoriteKey.name], default: "")
@@ -137,8 +165,8 @@ extension SAConnectionInfo {
         info.enableClearTextPlugin = intValue(fav[FavoriteKey.enableClearTextPlugin], default: 0)
         info.requestServerPublicKey = intValue(fav[FavoriteKey.requestServerPublicKey], default: 0)
 
-        // AWS IAM: the toggle is derived from the connection type, not stored.
-        info.useAWSIAMAuth = info.type == .awsIAM ? 1 : 0
+        // AWS IAM: the toggle is derived from the resolved auth method.
+        info.useAWSIAMAuth = info.authMethod == .awsIAM ? 1 : 0
         info.awsRegion = stringValue(fav[FavoriteKey.awsRegion], default: "")
         info.awsProfile = stringValue(fav[FavoriteKey.awsProfile], default: "default")
 

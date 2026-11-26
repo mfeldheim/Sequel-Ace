@@ -1104,4 +1104,45 @@ final class SAConnectionFormModelTests: XCTestCase {
             XCTAssertEqual(model.effectiveName, "db.example.com", "\(type)")
         }
     }
+
+    // MARK: - Combined Connection Method + Auth Method
+
+    func testSSHTunnelCombinedWithAWSIAMForcesSSLAndHidesRemoteSocket() {
+        let model = SAConnectionFormModel()
+        model.connectionMethod = .sshTunnel
+        model.useSSL = true
+        model.authMethod = .awsIAM
+
+        XCTAssertEqual(model.connectionMethod, .sshTunnel)
+        XCTAssertEqual(model.authMethod, .awsIAM)
+        XCTAssertEqual(model.info.useAWSIAMAuth, 1)
+        XCTAssertEqual(model.info.useSSL, 0)
+        XCTAssertTrue(model.forcesSSL)
+        XCTAssertFalse(model.showsSSLToggle)
+        XCTAssertFalse(model.showsSSLFileOptions)
+        XCTAssertFalse(model.showsClearTextPluginToggle)
+        XCTAssertFalse(model.showsRequestServerPublicKeyToggle)
+        XCTAssertFalse(model.showsRemoteSocketField)
+
+        // Requires MySQL host even if remote socket is populated
+        model.info.sshRemoteSocketPath = "/var/run/mysqld/mysqld.sock"
+        XCTAssertFalse(model.canAttemptConnection)
+
+        model.info.host = "mydb.abc123.eu-central-1.rds.amazonaws.com"
+        model.info.sshHost = "bastion.example.com"
+        XCTAssertTrue(model.canAttemptConnection)
+        XCTAssertNil(model.validate())
+    }
+
+    func testSwitchingToSocketResetsAuthMethodToPassword() {
+        let model = SAConnectionFormModel()
+        model.connectionMethod = .sshTunnel
+        model.authMethod = .awsIAM
+        XCTAssertEqual(model.authMethod, .awsIAM)
+
+        model.connectionMethod = .socket
+        XCTAssertEqual(model.authMethod, .password)
+        XCTAssertEqual(model.info.useAWSIAMAuth, 0)
+        XCTAssertEqual(model.availableAuthMethods, [.password])
+    }
 }

@@ -156,4 +156,37 @@ final class SAConnectionInfoTests: XCTestCase {
 
         XCTAssertEqual(SAConnectionInfoObjC.resolvedMySQLConnectHost(for: info), "127.0.0.1")
     }
+
+    func testAWSIAMOverSSHTunnelResolvesToLoopbackAndDefersPasswordToDelegate() {
+        let info = SAConnectionInfoObjC()
+        info.connectionMethod = .sshTunnel
+        info.authMethod = .awsIAM
+        info.host = "mydb.abc123.eu-central-1.rds.amazonaws.com"
+        info.sshHost = "bastion.example.com"
+
+        XCTAssertEqual(info.type, .sshTunnel)
+        XCTAssertTrue(info.usesSSHTunnel)
+        XCTAssertTrue(info.usesAWSIAMAuth)
+        XCTAssertFalse(info.usesVaultAuth)
+        XCTAssertEqual(SAConnectionInfoObjC.resolvedMySQLConnectHost(for: info), "127.0.0.1")
+        XCTAssertTrue(
+            SAConnectionInfoObjC.shouldDeferMySQLPasswordToDelegate(
+                for: info,
+                password: "",
+                delegateAvailable: true
+            )
+        )
+    }
+
+    func testVaultOverSSHTunnelResolvesToLoopback() {
+        let info = SAConnectionInfoObjC()
+        info.connectionMethod = .sshTunnel
+        info.authMethod = .vault
+        info.host = "mydb.internal"
+
+        XCTAssertEqual(info.type, .sshTunnel)
+        XCTAssertTrue(info.usesSSHTunnel)
+        XCTAssertTrue(info.usesVaultAuth)
+        XCTAssertEqual(SAConnectionInfoObjC.resolvedMySQLConnectHost(for: info), "127.0.0.1")
+    }
 }

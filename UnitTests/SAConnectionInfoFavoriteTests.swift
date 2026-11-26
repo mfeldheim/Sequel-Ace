@@ -413,4 +413,69 @@ final class SAConnectionInfoFavoriteTests: XCTestCase {
         XCTAssertEqual(duplicate["name"] as? String, " Copy")
         XCTAssertEqual(duplicate.count, 2)
     }
+
+    // MARK: - Combined Connection Method + Auth Method decoding
+
+    func testDecodeSSHTunnelWithAWSIAMAuth() {
+        let fav: [AnyHashable: Any] = [
+            "type": NSNumber(value: SAConnectionType.sshTunnel.rawValue),
+            "authMethod": NSNumber(value: SAAuthMethod.awsIAM.rawValue),
+            "useAWSIAMAuth": NSNumber(value: 1),
+            "host": "mydb.abc123.eu-central-1.rds.amazonaws.com",
+            "sshHost": "bastion.example.com",
+            "awsProfile": "prod",
+            "awsRegion": "eu-central-1"
+        ]
+
+        let info = SAConnectionInfo.fromFavoriteDictionary(fav)
+        XCTAssertEqual(info.connectionMethod, .sshTunnel)
+        XCTAssertEqual(info.authMethod, .awsIAM)
+        XCTAssertEqual(info.type, .sshTunnel)
+        XCTAssertEqual(info.useAWSIAMAuth, 1)
+        XCTAssertEqual(info.awsProfile, "prod")
+        XCTAssertEqual(info.awsRegion, "eu-central-1")
+        XCTAssertEqual(info.sshHost, "bastion.example.com")
+    }
+
+    func testDecodeSSHTunnelWithLegacyUseAWSIAMFlagAlone() {
+        let fav: [AnyHashable: Any] = [
+            "type": NSNumber(value: SAConnectionType.sshTunnel.rawValue),
+            "useAWSIAMAuth": NSNumber(value: 1),
+            "host": "mydb.abc123.eu-central-1.rds.amazonaws.com",
+            "sshHost": "bastion.example.com"
+        ]
+
+        let info = SAConnectionInfo.fromFavoriteDictionary(fav)
+        XCTAssertEqual(info.connectionMethod, .sshTunnel)
+        XCTAssertEqual(info.authMethod, .awsIAM)
+        XCTAssertEqual(info.useAWSIAMAuth, 1)
+    }
+
+    func testDecodeSSHTunnelWithVaultAuth() {
+        let fav: [AnyHashable: Any] = [
+            "type": NSNumber(value: SAConnectionType.sshTunnel.rawValue),
+            "authMethod": NSNumber(value: SAAuthMethod.vault.rawValue),
+            "host": "mydb.internal",
+            "sshHost": "bastion.example.com",
+            "vaultHost": "https://vault.example.com",
+            "vaultCredentialsPath": "db/creds/readonly"
+        ]
+
+        let info = SAConnectionInfo.fromFavoriteDictionary(fav)
+        XCTAssertEqual(info.connectionMethod, .sshTunnel)
+        XCTAssertEqual(info.authMethod, .vault)
+        XCTAssertEqual(info.useAWSIAMAuth, 0)
+    }
+
+    func testDecodeSocketClampsAuthMethodToPassword() {
+        let fav: [AnyHashable: Any] = [
+            "type": NSNumber(value: SAConnectionType.socket.rawValue),
+            "authMethod": NSNumber(value: SAAuthMethod.awsIAM.rawValue)
+        ]
+
+        let info = SAConnectionInfo.fromFavoriteDictionary(fav)
+        XCTAssertEqual(info.connectionMethod, .socket)
+        XCTAssertEqual(info.authMethod, .password)
+        XCTAssertEqual(info.useAWSIAMAuth, 0)
+    }
 }

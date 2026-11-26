@@ -65,6 +65,8 @@ import Foundation
     /// AWS-directory authorization is intentionally NOT covered here:
     /// it depends on Security framework bookmark state that's hard to
     /// fake in a pure validator and stays inline in the controller.
+    /// Legacy entry point accepting the unified `SAConnectionType`.
+    /// Forwards to `validate(connectionMethod:authMethod:...)`.
     @objc static func validate(
         type: SAConnectionType,
         host: String,
@@ -80,13 +82,71 @@ import Foundation
         sslCACertFileLocationEnabled: Bool,
         sslCACertFileLocation: String?
     ) -> SAConnectionValidationFailure? {
-        // 1. Host required for TCP/IP, SSH tunnel, and AWS IAM
-        //    connections — socket connections use a local socket path.
+        var info = SAConnectionInfo()
+        info.type = type
+        return validate(
+            connectionMethod: info.connectionMethod,
+            authMethod: info.authMethod,
+            host: host,
+            sshHost: sshHost,
+            sshRemoteSocketPath: sshRemoteSocketPath,
+            useSSL: useSSL,
+            sshKeyLocationEnabled: sshKeyLocationEnabled,
+            sshKeyLocation: sshKeyLocation,
+            sslKeyFileLocationEnabled: sslKeyFileLocationEnabled,
+            sslKeyFileLocation: sslKeyFileLocation,
+            sslCertificateFileLocationEnabled: sslCertificateFileLocationEnabled,
+            sslCertificateFileLocation: sslCertificateFileLocation,
+            sslCACertFileLocationEnabled: sslCACertFileLocationEnabled,
+            sslCACertFileLocation: sslCACertFileLocation
+        )
+    }
+
+    /// Run the pre-connection checks for a `(connectionMethod, authMethod)` pair.
+    /// Returns `nil` if the form is valid, otherwise the first failure encountered.
+    @objc static func validate(
+        connectionMethod: SAConnectionMethod,
+        authMethod: SAAuthMethod,
+        host: String,
+        sshHost: String,
+        sshRemoteSocketPath: String,
+        useSSL: Bool,
+        sshKeyLocationEnabled: Bool,
+        sshKeyLocation: String?,
+        sslKeyFileLocationEnabled: Bool,
+        sslKeyFileLocation: String?,
+        sslCertificateFileLocationEnabled: Bool,
+        sslCertificateFileLocation: String?,
+        sslCACertFileLocationEnabled: Bool,
+        sslCACertFileLocation: String?
+    ) -> SAConnectionValidationFailure? {
+        // 1. Host required for TCP/IP and SSH tunnel connections (except when
+        //    an SSH tunnel with password auth targets a remote socket path).
+        //    AWS IAM and Vault always require a TCP database host (e.g. RDS endpoint).
+        //    Vault's own host check runs in the controller/model for TCP/IP Vault,
+        //    matching the legacy validator where `.vault` skipped step 1 here.
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSSHHost = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedRemoteSocketPath = sshRemoteSocketPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sshTunnelUsesRemoteSocket = type == .sshTunnel && !trimmedRemoteSocketPath.isEmpty
-        if (type == .tcpIP || (type == .sshTunnel && !sshTunnelUsesRemoteSocket) || type == .awsIAM) && trimmedHost.isEmpty {
+        let sshTunnelUsesRemoteSocket = connectionMethod == .sshTunnel
+            && authMethod == .password
+            && !trimmedRemoteSocketPath.isEmpty
+        let requiresHostHere: Bool = {
+            if authMethod == .vault && connectionMethod == .tcpIP {
+                // Vault-over-TCP/IP checks vaultHost -> vaultCredentialsPath -> host
+                // in that order in the controller/model.
+                return false
+            }
+            switch connectionMethod {
+            case .socket:
+                return false
+            case .tcpIP:
+                return true
+            case .sshTunnel:
+                return !sshTunnelUsesRemoteSocket
+            }
+        }()
+        if requiresHostHere && trimmedHost.isEmpty {
             return SAConnectionValidationFailure(
                 kind: .hostMissing,
                 alertTitle: NSLocalizedString("Insufficient connection details",
@@ -98,7 +158,7 @@ import Foundation
         }
 
         // 2. SSH host required for SSH-tunnel connections.
-        if type == .sshTunnel && trimmedSSHHost.isEmpty {
+        if connectionMethod == .sshTunnel && trimmedSSHHost.isEmpty {
             return SAConnectionValidationFailure(
                 kind: .sshHostMissing,
                 alertTitle: NSLocalizedString("Insufficient connection details",
@@ -110,7 +170,7 @@ import Foundation
         }
 
         // 3. SSH key file must exist when SSH-tunnel + key location toggle enabled.
-        if type == .sshTunnel, sshKeyLocationEnabled, let path = sshKeyLocation,
+        if connectionMethod == .sshTunnel, sshKeyLocationEnabled, let path = sshKeyLocation,
            !fileExistsExpandingTilde(path) {
             return SAConnectionValidationFailure(
                 kind: .sshKeyFileMissing,
@@ -122,21 +182,9 @@ import Foundation
             )
         }
 
-        // 4-6. SSL file checks — run for connection types whose MySQL leg can use
-        //      the shared SSL file fields. The order matches the original code so that
-        //      a multi-issue form produces the same first-error UX.
-        //
-        //      `.sshTunnel` was missing here until now, and it was an oversight rather
-        //      than a decision: the SSH tab has its own "Require SSL" checkbox and SSL
-        //      details container (`sshConnectionSSLDetailsContainer`), whose file
-        //      buttons write the very same `sslKeyFileLocation` /
-        //      `sslCertificateFileLocation` / `sslCACertFileLocation` properties this
-        //      validator reads. An enabled-but-missing file on a tunnel therefore
-        //      reached connection setup unchecked and failed at connect time instead.
-        //      The pre-D3 ObjC read `SPTCPIPConnection || SPSocketConnection`, D3
-        //      preserved that, and `.vault` was appended when Vault landed — the SSH
-        //      case simply never got revisited.
-        if (type == .tcpIP || type == .socket || type == .sshTunnel || type == .vault) && useSSL {
+        // 4-6. SSL file checks — run for any non-AWS-IAM auth method when manual SSL
+        //      is enabled. AWS IAM forces TLS internally without manual SSL file pickers.
+        if authMethod != .awsIAM && useSSL {
             if sslKeyFileLocationEnabled, let path = sslKeyFileLocation,
                !fileExistsExpandingTilde(path) {
                 return SAConnectionValidationFailure(

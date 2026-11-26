@@ -227,7 +227,7 @@ import SwiftUI
         // the service later connects to, and the tunnel resolves a
         // whitespace-bearing host and fails.
         attempt.host = attempt.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if attempt.type == .sshTunnel {
+        if attempt.connectionMethod == .sshTunnel {
             attempt.sshHost = attempt.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
@@ -235,7 +235,8 @@ import SwiftUI
         // editing. Without it the tab title and a saved .spf fall back to
         // user@host, disagreeing with the placeholder the form showed.
         if attempt.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            attempt.name = SAConnectionFormHelpers.generateName(type: attempt.type,
+            attempt.name = SAConnectionFormHelpers.generateName(connectionMethod: attempt.connectionMethod,
+                                                                authMethod: attempt.authMethod,
                                                                 host: attempt.host,
                                                                 database: attempt.database,
                                                                 vaultHost: attempt.vaultHost,
@@ -257,7 +258,7 @@ import SwiftUI
 
                 // An AWS IAM token is only valid for this attempt, so it is passed to the
                 // service without being stored as the favorite's password.
-                if attempt.type != .awsIAM {
+                if attempt.authMethod != .awsIAM {
                     resolved.password = credentials.password
                 }
 
@@ -296,10 +297,10 @@ import SwiftUI
         let detail: String?
     }
 
-    /// Resolves type-specific credentials, calling back on the main queue.
+    /// Resolves auth-method-specific credentials, calling back on the main queue.
     private func resolveCredentials(for info: SAConnectionInfo,
                                     _ completion: @escaping (Result<SAResolvedCredentials, SACredentialFailure>) -> Void) {
-        switch info.type {
+        switch info.authMethod {
         case .awsIAM:
             // Under the sandbox the credential loader cannot read ~/.aws without
             // a security-scoped bookmark, and the only UI that creates one lives
@@ -318,7 +319,7 @@ import SwiftUI
         case .vault:
             resolveVaultCredentials(info: info, completion: completion)
 
-        case .tcpIP, .socket, .sshTunnel:
+        case .password:
             // The typed password is the credential. Reading a saved favorite's
             // password out of the keychain is still not wired — the D1 decoder
             // never carried passwords, and the lookup needs the account/service
@@ -529,10 +530,10 @@ import SwiftUI
     private func warnIfRequestedSSLWasNotEstablished(_ connection: SPMySQLConnection,
                                                      info: SAConnectionInfoObjC) {
         let details = info.info
-        let requiresSSL = details.useSSL != 0 || details.type == .awsIAM
-        let checkedTypes: [SAConnectionType] = [.tcpIP, .socket, .awsIAM, .vault]
+        let requiresSSL = details.useSSL != 0 || details.authMethod == .awsIAM
+        let shouldWarn = details.connectionMethod != .sshTunnel || details.authMethod == .awsIAM
 
-        guard requiresSSL, checkedTypes.contains(details.type), !connection.isConnectedViaSSL() else {
+        guard requiresSSL, shouldWarn, !connection.isConnectedViaSSL() else {
             return
         }
 
@@ -625,6 +626,7 @@ extension SAConnectionInfoObjC {
         let info = self.info
 
         controller.type = info.type.rawValue
+        controller.authMethod = info.authMethod.rawValue
         controller.name = info.name
         controller.host = info.host
         controller.user = info.user

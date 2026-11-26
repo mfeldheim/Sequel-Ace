@@ -76,6 +76,31 @@ import Foundation
         return "\(base)/\(database)"
     }
 
+    /// Auto-generate a connection name using the separated connection and auth methods.
+    @objc static func generateName(
+        connectionMethod: SAConnectionMethod,
+        authMethod: SAAuthMethod,
+        host: String,
+        database: String,
+        vaultHost: String,
+        vaultCredentialsPath: String
+    ) -> String? {
+        if authMethod == .vault {
+            let role = (vaultCredentialsPath as NSString).lastPathComponent
+            let endpoint = vaultHost.isEmpty ? "vault" : vaultHost
+            return role.isEmpty ? endpoint : "\(endpoint)/\(role)"
+        }
+
+        if connectionMethod != .socket, host.isEmpty {
+            return nil
+        }
+        let base = (connectionMethod == .socket) ? "localhost" : host
+        if database.isEmpty {
+            return base
+        }
+        return "\(base)/\(database)"
+    }
+
     /// As above, but with the Vault rule folded in.
     ///
     /// A Vault connection is named after its *Vault* endpoint and role rather
@@ -90,12 +115,15 @@ import Foundation
         vaultHost: String,
         vaultCredentialsPath: String
     ) -> String? {
-        guard type == .vault else {
-            return generateName(type: type, host: host, database: database)
-        }
-
-        let role = (vaultCredentialsPath as NSString).lastPathComponent
-        let endpoint = vaultHost.isEmpty ? "vault" : vaultHost
-        return role.isEmpty ? endpoint : "\(endpoint)/\(role)"
+        var info = SAConnectionInfo()
+        info.type = type
+        return generateName(
+            connectionMethod: info.connectionMethod,
+            authMethod: info.authMethod,
+            host: host,
+            database: database,
+            vaultHost: vaultHost,
+            vaultCredentialsPath: vaultCredentialsPath
+        )
     }
 }

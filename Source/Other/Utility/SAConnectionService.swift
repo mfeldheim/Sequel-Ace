@@ -290,7 +290,7 @@ import Foundation
             completion(result)
         }
 
-        if info.type == .sshTunnel {
+        if info.connectionMethod == .sshTunnel {
             establishSSHTunnel(info: info, sshPassword: sshPassword, parentWindow: parentWindow, attemptID: attemptID) { [weak self] tunnel, failure in
                 guard let self = self, self.isCurrentAttempt(attemptID)
                 else { return }
@@ -350,7 +350,7 @@ import Foundation
 
             conn.username = info.user
 
-            switch info.type {
+            switch info.connectionMethod {
             case .socket:
                 conn.useSocket = true
                 conn.socketPath = info.socket
@@ -363,13 +363,10 @@ import Foundation
                     conn.setProxy(tunnel)
                 }
 
-            case .tcpIP, .awsIAM, .vault:
+            case .tcpIP:
                 conn.useSocket = false
                 conn.host = SAConnectionInfoObjC.resolvedMySQLConnectHost(for: info) ?? "127.0.0.1"
                 conn.port = UInt(info.port) ?? 3306
-
-            @unknown default:
-                break
             }
 
             if let password {
@@ -380,12 +377,13 @@ import Foundation
             conn.requestServerPublicKey = info.requestServerPublicKey != 0
 
             // AWS IAM auth requires cleartext plugin and SSL regardless of saved flags
-            if info.type == .awsIAM {
+            // (including when combined with an SSH tunnel).
+            if info.authMethod == .awsIAM {
                 conn.enableClearTextPlugin = true
                 conn.useSSL = true
             }
 
-            if info.useSSL != 0 || info.type == .awsIAM {
+            if info.useSSL != 0 || info.authMethod == .awsIAM {
                 conn.useSSL = true
                 if info.sslKeyFileLocationEnabled != 0 {
                     conn.sslKeyFilePath = info.sslKeyFileLocation
@@ -534,7 +532,7 @@ import Foundation
             return
         }
         let remoteSocketPath = info.sshRemoteSocketPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let useRemoteSocket = !remoteSocketPath.isEmpty
+        let useRemoteSocket = info.authMethod == .password && !remoteSocketPath.isEmpty
         let mysqlPort = useRemoteSocket ? 0 : (Int(info.port) ?? 3306)
         let mysqlHost = useRemoteSocket ? "127.0.0.1" : info.host
 

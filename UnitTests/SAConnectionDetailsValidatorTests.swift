@@ -349,6 +349,68 @@ final class SAConnectionDetailsValidatorTests: XCTestCase {
         XCTAssertEqual(failure?.kind, .sshHostMissing)
     }
 
+    // MARK: - Combined SSH Tunnel + AWS IAM validation
+
+    func testSSHTunnelWithAWSIAMRequiresHostEvenWhenRemoteSocketIsSet() {
+        let failure = SAConnectionDetailsValidator.validate(
+            connectionMethod: .sshTunnel,
+            authMethod: .awsIAM,
+            host: "",
+            sshHost: "bastion.example.com",
+            sshRemoteSocketPath: "/var/run/mysqld/mysqld.sock",
+            useSSL: false,
+            sshKeyLocationEnabled: false,
+            sshKeyLocation: nil,
+            sslKeyFileLocationEnabled: false,
+            sslKeyFileLocation: nil,
+            sslCertificateFileLocationEnabled: false,
+            sslCertificateFileLocation: nil,
+            sslCACertFileLocationEnabled: false,
+            sslCACertFileLocation: nil
+        )
+        XCTAssertEqual(failure?.kind, .hostMissing)
+    }
+
+    func testSSHTunnelWithAWSIAMRequiresSSHHost() {
+        let failure = SAConnectionDetailsValidator.validate(
+            connectionMethod: .sshTunnel,
+            authMethod: .awsIAM,
+            host: "mydb.abc123.eu-central-1.rds.amazonaws.com",
+            sshHost: "",
+            sshRemoteSocketPath: "",
+            useSSL: false,
+            sshKeyLocationEnabled: false,
+            sshKeyLocation: nil,
+            sslKeyFileLocationEnabled: false,
+            sslKeyFileLocation: nil,
+            sslCertificateFileLocationEnabled: false,
+            sslCertificateFileLocation: nil,
+            sslCACertFileLocationEnabled: false,
+            sslCACertFileLocation: nil
+        )
+        XCTAssertEqual(failure?.kind, .sshHostMissing)
+    }
+
+    func testSSHTunnelWithAWSIAMPassesWithHostAndSSHHostAndSkipsManualSSLFiles() {
+        let failure = SAConnectionDetailsValidator.validate(
+            connectionMethod: .sshTunnel,
+            authMethod: .awsIAM,
+            host: "mydb.abc123.eu-central-1.rds.amazonaws.com",
+            sshHost: "bastion.example.com",
+            sshRemoteSocketPath: "",
+            useSSL: true,
+            sshKeyLocationEnabled: false,
+            sshKeyLocation: nil,
+            sslKeyFileLocationEnabled: true,
+            sslKeyFileLocation: missingFilePath,
+            sslCertificateFileLocationEnabled: false,
+            sslCertificateFileLocation: nil,
+            sslCACertFileLocationEnabled: false,
+            sslCACertFileLocation: nil
+        )
+        XCTAssertNil(failure)
+    }
+
     func testSSLKeyMissingBeatsCertMissing() {
         // Both files are missing — only the first one in source order
         // should be reported, matching the controller's serialized

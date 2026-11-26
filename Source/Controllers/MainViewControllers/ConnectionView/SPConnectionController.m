@@ -425,19 +425,20 @@ static void *kHidePasswordImageKey = &kHidePasswordImageKey;
     // still owns the alert + per-failure side effects (clearing the
     // matching enabled toggles / paths) so the user can correct the input.
     SAConnectionValidationFailure *failure = [SAConnectionDetailsValidator
-        validateWithType:(SAConnectionType)[self type]
-                    host:[self host] ?: @""
-                 sshHost:[self sshHost] ?: @""
-     sshRemoteSocketPath:[self sshRemoteSocketPath] ?: @""
-                  useSSL:[self useSSL]
-   sshKeyLocationEnabled:(sshKeyLocationEnabled != NSControlStateValueOff)
-         sshKeyLocation:sshKeyLocation
-sslKeyFileLocationEnabled:(sslKeyFileLocationEnabled != NSControlStateValueOff)
-     sslKeyFileLocation:sslKeyFileLocation
-sslCertificateFileLocationEnabled:(sslCertificateFileLocationEnabled != NSControlStateValueOff)
-sslCertificateFileLocation:sslCertificateFileLocation
-sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValueOff)
-  sslCACertFileLocation:sslCACertFileLocation];
+        validateWithConnectionMethod:[self _connectionMethod]
+                          authMethod:(SAAuthMethod)self.authMethod
+                                host:[self host] ?: @""
+                             sshHost:[self sshHost] ?: @""
+                 sshRemoteSocketPath:[self sshRemoteSocketPath] ?: @""
+                              useSSL:[self useSSL]
+               sshKeyLocationEnabled:(sshKeyLocationEnabled != NSControlStateValueOff)
+                      sshKeyLocation:sshKeyLocation
+           sslKeyFileLocationEnabled:(sslKeyFileLocationEnabled != NSControlStateValueOff)
+                  sslKeyFileLocation:sslKeyFileLocation
+   sslCertificateFileLocationEnabled:(sslCertificateFileLocationEnabled != NSControlStateValueOff)
+          sslCertificateFileLocation:sslCertificateFileLocation
+        sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValueOff)
+               sslCACertFileLocation:sslCACertFileLocation];
 
     if (failure) {
         switch (failure.kind) {
@@ -576,21 +577,24 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     SAConnectionPreferences *preferences = [SAConnectionPreferences fromUserDefaults];
 
     // Update progress text
+    NSString *connectingStatusText;
     if (isTestingConnection) {
-        [progressIndicatorText setStringValue:([self type] == SPSSHTunnelConnection)
+        connectingStatusText = [self usesSSHTunnel]
             ? NSLocalizedString(@"Testing SSH...", @"testing SSH status message")
-            : NSLocalizedString(@"Testing MySQL...", @"testing MySQL status message")];
+            : NSLocalizedString(@"Testing MySQL...", @"testing MySQL status message");
     } else {
-        [progressIndicatorText setStringValue:([self type] == SPSSHTunnelConnection)
+        connectingStatusText = [self usesSSHTunnel]
             ? NSLocalizedString(@"SSH connecting...", @"SSH connecting status message")
-            : NSLocalizedString(@"MySQL connecting...", @"MySQL connecting status message")];
+            : NSLocalizedString(@"MySQL connecting...", @"MySQL connecting status message");
     }
+    [progressIndicatorText setStringValue:connectingStatusText];
 
     // Change Connect button to Cancel
     [connectButton setTitle:NSLocalizedString(@"Cancel", @"cancel button")];
     [connectButton setAction:@selector(cancelConnection:)];
     [connectButton setEnabled:YES];
     [connectButton display];
+    [self _syncFormBridgeActionStateWithStatus:connectingStatusText canCancel:YES];
 
     // Shared completion handler — used by both the Vault and non-Vault paths.
     __weak __kindof SPConnectionController *weakSelf = self;
@@ -751,7 +755,7 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
                 [mainSelf.connectionService connectWith:info
                                             preferences:preferences
                                                password:capturedPassword
-                                            sshPassword:@""
+                                            sshPassword:resolvedSSHPassword
                                            parentWindow:[mainSelf->dbDocument parentWindowControllerWindow]
                                              completion:connectCompletion];
             });
@@ -775,8 +779,10 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
 {
     [connectButton setEnabled:NO];
 
-    [progressIndicatorText setStringValue:NSLocalizedString(@"Cancelling...", @"cancelling task status message")];
+    NSString *cancellingText = NSLocalizedString(@"Cancelling...", @"cancelling task status message");
+    [progressIndicatorText setStringValue:cancellingText];
     [progressIndicatorText display];
+    [self _syncFormBridgeActionStateWithStatus:cancellingText canCancel:NO];
 
     cancellingConnection = YES;
     connectionAttemptID++;
@@ -1180,24 +1186,124 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [self _startEditingConnection];
 }
 
+- (SAConnectionMethod)_connectionMethod
+{
+    switch ([self type]) {
+        case SPSocketConnection:
+            return SAConnectionMethodSocket;
+        case SPSSHTunnelConnection:
+            return SAConnectionMethodSshTunnel;
+        default:
+            return SAConnectionMethodTcpIP;
+    }
+}
+
+- (BOOL)usesSSHTunnel
+{
+    return [self _connectionMethod] == SAConnectionMethodSshTunnel;
+}
+
+- (BOOL)usesAWSIAMAuth
+{
+    return self.authMethod == SAAuthMethodAwsIAM;
+}
+
+- (BOOL)usesVaultAuth
+{
+    return self.authMethod == SAAuthMethodVault;
+}
+
+- (void)initiateConnectionFromFormIsTesting:(BOOL)isTesting
+{
+    [self initiateConnection:(isTesting ? testConnectButton : connectButton)];
+}
+
+- (void)startEditingConnectionFromForm
+{
+    [self _startEditingConnection];
+}
+
+- (void)applyFormInfo:(SAConnectionInfoObjC *)info
+{
+    if (!info) return;
+    previousType = (NSInteger)info.type;
+    [self setType:(NSInteger)info.type];
+    self.authMethod = (NSInteger)info.authMethod;
+    [self setName:info.name];
+    [self setHost:info.host];
+    [self setUser:info.user];
+    [self setPassword:info.password];
+    [self setDatabase:info.database];
+    [self setSocket:info.socket];
+    [self setPort:info.port];
+    [self setColorIndex:info.colorIndex];
+    [self setUseCompression:info.useCompression];
+    [self setTimeZoneMode:(SPConnectionTimeZoneMode)info.timeZoneMode];
+    [self setTimeZoneIdentifier:info.timeZoneIdentifier];
+    [self setAllowDataLocalInfile:info.allowDataLocalInfile];
+    [self setEnableClearTextPlugin:info.enableClearTextPlugin];
+    [self setRequestServerPublicKey:info.requestServerPublicKey];
+    [self setUseAWSIAMAuth:info.useAWSIAMAuth];
+    [self setAwsRegion:info.awsRegion];
+    [self setAwsProfile:info.awsProfile];
+    [self setVaultHost:info.vaultHost];
+    [self setVaultPort:([info.vaultPort length] ? info.vaultPort : nil)];
+    [self setVaultOIDCMount:([info.vaultOIDCMount length] ? info.vaultOIDCMount : nil)];
+    [self setVaultCredentialsPath:info.vaultCredentialsPath];
+    [self setUseSSL:info.useSSL];
+    [self setSslKeyFileLocationEnabled:info.sslKeyFileLocationEnabled];
+    [self setSslKeyFileLocation:info.sslKeyFileLocation];
+    [self setSslCertificateFileLocationEnabled:info.sslCertificateFileLocationEnabled];
+    [self setSslCertificateFileLocation:info.sslCertificateFileLocation];
+    [self setSslCACertFileLocationEnabled:info.sslCACertFileLocationEnabled];
+    [self setSslCACertFileLocation:info.sslCACertFileLocation];
+    [self setSshHost:info.sshHost];
+    [self setSshUser:info.sshUser];
+    [self setSshPassword:info.sshPassword];
+    [self setSshKeyLocationEnabled:info.sshKeyLocationEnabled];
+    [self setSshKeyLocation:info.sshKeyLocation];
+    [self setSshPort:info.sshPort];
+    [self setSshRemoteSocketPath:info.sshRemoteSocketPath];
+}
+
+- (void)syncFormFromController
+{
+    [self.formBridge syncFromController];
+}
+
+- (void)_syncFormBridgeActionStateWithStatus:(NSString *)statusText canCancel:(BOOL)canCancel
+{
+    [self.formBridge updateActionStateWithIsConnecting:isConnecting
+                                             canCancel:canCancel
+                                            canConnect:[connectButton isEnabled]
+                                            statusText:statusText
+                                       showEditButtons:isEditingConnection
+                                       canSaveFavorite:([self selectedFavorite] != nil)];
+}
+
 - (BOOL)_isAWSIAMConnection
 {
-    return [self type] == SPAWSIAMConnection;
+    return [self usesAWSIAMAuth];
 }
 
 - (BOOL)_shouldRequireMySQLHost
 {
-    NSString *trimmedRemoteSocketPath = [[self sshRemoteSocketPath] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([self type] == SPSSHTunnelConnection && [trimmedRemoteSocketPath length]) {
+    SAConnectionMethod method = [self _connectionMethod];
+    if (method == SAConnectionMethodSocket) {
         return NO;
     }
-
-    return [self type] == SPTCPIPConnection || [self type] == SPSSHTunnelConnection || [self type] == SPAWSIAMConnection;
+    if (method == SAConnectionMethodSshTunnel && self.authMethod == SAAuthMethodPassword) {
+        NSString *trimmedRemoteSocketPath = [[self sshRemoteSocketPath] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([trimmedRemoteSocketPath length]) {
+            return NO;
+        }
+    }
+    return YES;
 }
 
 - (BOOL)_isVaultConnection
 {
-    return [self type] == SPVaultConnection;
+    return [self usesVaultAuth];
 }
 
 - (void)_syncAWSIAMAndSSLInterfaceState
@@ -1297,9 +1403,14 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [openPanel setMessage:NSLocalizedString(@"Select your .aws directory to enable AWS IAM authentication", @"AWS directory selection message")];
     [openPanel setPrompt:NSLocalizedString(@"Authorize", @"AWS directory authorize button")];
 
-    // Start at the home directory
+    // Pre-select ~/.aws directly if it exists, otherwise start in the home directory
     NSString *homeDirectory = NSHomeDirectory();
-    [openPanel setDirectoryURL:[NSURL fileURLWithPath:homeDirectory]];
+    NSString *awsDirectory = [homeDirectory stringByAppendingPathComponent:@".aws"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:awsDirectory]) {
+        [openPanel setDirectoryURL:[NSURL fileURLWithPath:awsDirectory]];
+    } else {
+        [openPanel setDirectoryURL:[NSURL fileURLWithPath:homeDirectory]];
+    }
 
     [openPanel beginSheetModalForWindow:[dbDocument parentWindowControllerWindow] completionHandler:^(NSModalResponse result) {
         if (result == NSModalResponseOK) {
@@ -1673,10 +1784,11 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     // by SAConnectionInfoFavoriteTests.
     SAConnectionInfoObjC *details = [SAConnectionInfoObjC infoFromFavoriteDictionary:fav];
 
-    // Set up the type, also storing it in the previous type store to prevent type "changes" triggering actions
+    // Set up the type & auth method, storing type in previousType to prevent type "changes" triggering actions
     NSUInteger connectionType = (NSUInteger)[details type];
     previousType = connectionType;
     [self setType:connectionType];
+    self.authMethod = (NSInteger)[details authMethod];
 
     // Standard details
     [self setName:[details name]];
@@ -1761,8 +1873,9 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [self setSshRemoteSocketPath:[details sshRemoteSocketPath]];
 
     // Check whether the password exists in the keychain, and if so add it; also record the
-    // keychain details so we can pass around only those details if the password doesn't change
-    if ([self type] == SPVaultConnection) {
+    // keychain details so we can pass around only those details if the password doesn't change.
+    // AWS IAM and Vault generate ephemeral credentials at connect time.
+    if (self.authMethod != SAAuthMethodPassword) {
         connectionKeychainItemName = nil;
         connectionKeychainItemAccount = nil;
         [self setPassword:nil];
@@ -1792,9 +1905,8 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
         }
     }
 
-    // And the same for the SSH password. Vault connections do not use SSH
-    // tunnels, so do not hydrate stale SSH keychain entries from old favorites.
-    if ([self type] == SPVaultConnection) {
+    // And the same for the SSH password whenever an SSH tunnel is configured.
+    if (![self usesSSHTunnel]) {
         connectionSSHKeychainItemName = nil;
         connectionSSHKeychainItemAccount = nil;
         [self setSshPassword:nil];
@@ -1814,6 +1926,8 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [prefs setInteger:[[fav objectForKey:SPFavoriteIDKey] integerValue] forKey:SPLastFavoriteID];
 
     [self updateFavoriteNextKeyView];
+    [self syncFormFromController];
+    [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 }
 
 /**
@@ -2826,19 +2940,19 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
         return;
     }
 
-    if (validateDetails && [self type] == SPVaultConnection && ![[self host] length]) {
+    if (validateDetails && [self usesVaultAuth] && ![[self host] length]) {
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Insufficient connection details", @"insufficient details message")
                                      message:NSLocalizedString(@"Please provide a database host to save a Vault favorite.", @"vault db host required save message")
                                     callback:nil];
         return;
     }
-    if (validateDetails && [self type] == SPVaultConnection && ![[self vaultHost] length]) {
+    if (validateDetails && [self usesVaultAuth] && ![[self vaultHost] length]) {
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Insufficient connection details", @"insufficient details message")
                                      message:NSLocalizedString(@"A Vault host is required to save a Vault favorite.", @"vault host required save message")
                                     callback:nil];
         return;
     }
-    if (validateDetails && [self type] == SPVaultConnection && ![[self vaultCredentialsPath] length]) {
+    if (validateDetails && [self usesVaultAuth] && ![[self vaultCredentialsPath] length]) {
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Insufficient connection details", @"insufficient details message")
                                      message:NSLocalizedString(@"A Vault credentials path is required to save a Vault favorite. Fill in the mount and role, or paste a full path into the Role field.", @"vault creds path required save message")
                                     callback:nil];
@@ -2846,7 +2960,7 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     }
 
     // If SSH is enabled, ensure that the SSH host is not nil
-    if (validateDetails && [self type] == SPSSHTunnelConnection && ![[self sshHost] length]) {
+    if (validateDetails && [self usesSSHTunnel] && ![[self sshHost] length]) {
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Insufficient connection details", @"insufficient details message") message:NSLocalizedString(@"Please enter the hostname for the SSH Tunnel, or disable the SSH Tunnel.", @"message of panel when ssh details are incomplete") callback:nil];
         return;
     }
@@ -2884,6 +2998,7 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
 
     // Set standard details for the connection
     [theFavorite setObject:[NSNumber numberWithInteger:[self type]] forKey:SPFavoriteTypeKey];
+    [theFavorite setObject:[NSNumber numberWithInteger:self.authMethod] forKey:SPFavoriteAuthMethodKey];
     _setOrRemoveKey(SPFavoriteHostKey, [self host]);
     _setOrRemoveKey(SPFavoriteSocketKey, [self socket]);
     _setOrRemoveKey(SPFavoriteUserKey, [self user]);
@@ -2898,7 +3013,7 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [theFavorite setObject:[NSNumber numberWithInteger:[self enableClearTextPlugin]] forKey:SPFavoriteEnableClearTextPluginKey];
     [theFavorite setObject:[NSNumber numberWithInteger:[self requestServerPublicKey]] forKey:SPFavoriteRequestServerPublicKeyKey];
     // AWS IAM Authentication (profile-based only)
-    NSInteger awsIAMEnabled = ([self type] == SPAWSIAMConnection) ? NSControlStateValueOn : NSControlStateValueOff;
+    NSInteger awsIAMEnabled = [self usesAWSIAMAuth] ? NSControlStateValueOn : NSControlStateValueOff;
     [theFavorite setObject:[NSNumber numberWithInteger:awsIAMEnabled] forKey:SPFavoriteUseAWSIAMAuthKey];
     _setOrRemoveKey(SPFavoriteAWSRegionKey, [self awsRegion]);
     _setOrRemoveKey(SPFavoriteAWSProfileKey, [self awsProfile]);
@@ -2916,9 +3031,8 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     [theFavorite setObject:[NSNumber numberWithInteger:[self sslCACertFileLocationEnabled]] forKey:SPFavoriteSSLCACertFileLocationEnabledKey];
     _setOrRemoveKey(SPFavoriteSSLCACertFileLocationKey, [self sslCACertFileLocation]);
 
-    // SSH details. Vault credentials are generated directly from Vault and
-    // cannot be combined with an SSH tunnel; remove stale SSH favorite fields.
-    if ([self type] == SPVaultConnection) {
+    // SSH details — persisted whenever SSH Tunnel is selected (including with AWS IAM or Vault).
+    if (![self usesSSHTunnel]) {
         [theFavorite removeObjectForKey:SPFavoriteSSHHostKey];
         [theFavorite removeObjectForKey:SPFavoriteSSHUserKey];
         [theFavorite removeObjectForKey:SPFavoriteSSHPortKey];
@@ -2942,8 +3056,8 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     NSString *oldHostnameForPassword = ([[currentFavorite objectForKey:SPFavoriteTypeKey] integerValue] == SPSocketConnection) ? @"localhost" : [currentFavorite objectForKey:SPFavoriteHostKey];
     NSString *newHostnameForPassword = ([self type] == SPSocketConnection) ? @"localhost" : [self host];
 
-    if ([self type] == SPVaultConnection) {
-        // Vault credentials are generated at connect time; remove any static SQL password from the previous favorite type.
+    if (self.authMethod != SAAuthMethodPassword) {
+        // Ephemeral-credential auth methods (AWS IAM, Vault) do not store a static SQL password.
         if (!createNewFavorite) {
             oldKeychainName = [keychain nameForFavoriteName:[currentFavorite objectForKey:SPFavoriteNameKey] id:[currentFavorite objectForKey:SPFavoriteIDKey]];
             oldKeychainAccount = [keychain accountForUser:[currentFavorite objectForKey:SPFavoriteUserKey] host:oldHostnameForPassword database:[currentFavorite objectForKey:SPFavoriteDatabaseKey]];
@@ -2992,8 +3106,8 @@ sslCACertFileLocationEnabled:(sslCACertFileLocationEnabled != NSControlStateValu
     /*
      * Password handling for the SSH connection
      */
-    if ([self type] == SPVaultConnection) {
-        // Remove any SSH password left behind when converting an SSH favorite to Vault.
+    if (![self usesSSHTunnel]) {
+        // Remove any SSH password left behind when converting an SSH favorite to non-SSH.
         if (!createNewFavorite) {
             oldKeychainName = [keychain nameForSSHForFavoriteName:[currentFavorite objectForKey:SPFavoriteNameKey] id:[currentFavorite objectForKey:SPFavoriteIDKey]];
             oldKeychainAccount = [keychain accountForSSHUser:[currentFavorite objectForKey:SPFavoriteSSHUserKey] sshHost:[currentFavorite objectForKey:SPFavoriteSSHHostKey]];
@@ -3324,6 +3438,8 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 
     // Revert the connect button back to its original selector
     [connectButton setAction:@selector(initiateConnection:)];
+    [self syncFormFromController];
+    [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 }
 
 /**
@@ -3463,11 +3579,12 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 {
     // The Vault rule moved into SAConnectionFormHelpers so the SwiftUI form
     // shares it; behaviour is unchanged.
-    return [SAConnectionFormHelpers generateNameWithType:(SAConnectionType)[self type]
-                                                    host:[self host] ?: @""
-                                                database:[self database] ?: @""
-                                               vaultHost:[self vaultHost] ?: @""
-                                    vaultCredentialsPath:[self vaultCredentialsPath] ?: @""];
+    return [SAConnectionFormHelpers generateNameWithConnectionMethod:[self _connectionMethod]
+                                                          authMethod:(SAAuthMethod)self.authMethod
+                                                                host:[self host] ?: @""
+                                                            database:[self database] ?: @""
+                                                           vaultHost:[self vaultHost] ?: @""
+                                                vaultCredentialsPath:[self vaultCredentialsPath] ?: @""];
 }
 
 
@@ -3504,6 +3621,7 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
     // Show the area to allow saving the changes
     [self setIsEditingConnection:YES];
     [favoritesOutlineView setNeedsDisplayInRect:[favoritesOutlineView rectOfRow:[favoritesOutlineView selectedRow]]];
+    [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 }
 
 /**
@@ -3518,6 +3636,7 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
     [editButtonsView setHidden:YES];
     [progressIndicatorText setHidden:YES];
     [favoritesOutlineView display];
+    [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 }
 
 - (void)_documentWillClose:(NSNotification *)notification {
@@ -3591,10 +3710,11 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
     [connectButton display];
     [progressIndicator stopAnimation:self];
     [progressIndicatorText setHidden:YES];
+    [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 
     // If SSL was enabled (manually or implicitly via IAM), check it was established correctly
     BOOL requiresSSL = (useSSL || [self _isAWSIAMConnection]);
-    if (requiresSSL && ([self type] == SPTCPIPConnection || [self type] == SPSocketConnection || [self type] == SPAWSIAMConnection || [self type] == SPVaultConnection)) {
+    if (requiresSSL && (![self usesSSHTunnel] || [self _isAWSIAMConnection])) {
         if (![mySQLConnection isConnectedViaSSL]) {
             [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"SSL connection not established", @"SSL requested but not used title") message:NSLocalizedString(@"You requested that the connection should be established using SSL, but MySQL made the connection without SSL.\n\nThis may be because the server does not support SSL connections, or has SSL disabled; or insufficient details were supplied to establish an SSL connection.\n\nThis connection is not encrypted.", @"SSL connection requested but not established error detail") callback:nil];
         }
@@ -3642,7 +3762,8 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
 - (SAConnectionInfoObjC *)_buildConnectionInfo
 {
     SAConnectionInfoObjC *info = [[SAConnectionInfoObjC alloc] init];
-    info.type = (SAConnectionType)self.type;
+    info.connectionMethod = [self _connectionMethod];
+    info.authMethod = (SAAuthMethod)self.authMethod;
     info.name = self.name ?: @"";
     info.host = self.host ?: @"";
     info.user = self.user ?: @"";
@@ -4036,6 +4157,7 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
     [progressIndicator stopAnimation:self];
     [progressIndicatorText setStringValue:resultString];
     [progressIndicatorText setHidden:NO];
+    [self _syncFormBridgeActionStateWithStatus:resultString canCancel:NO];
 }
 
 #pragma mark - SPConnectionControllerDelegate
@@ -4063,10 +4185,12 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
         [self updateFavoriteSelection:self];
         favoriteNameFieldWasAutogenerated = NO;
         [connectionResizeContainer setHidden:NO];
+        [self.formBridge setHidden:NO];
         [connectionInstructionsTextField setStringValue:NSLocalizedString(@"Enter connection details below, or choose a favorite", @"enter connection details label")];
     }
     else if (selected > 1) {
         [connectionResizeContainer setHidden:YES];
+        [self.formBridge setHidden:YES];
         [connectionInstructionsTextField setStringValue:NSLocalizedString(@"Please choose a favorite", @"please choose a favorite connection view label")];
     }
 }
@@ -4853,6 +4977,15 @@ static NSComparisonResult _compareFavoritesUsingKey(id favorite1, id favorite2, 
         if ([dbDocument conformsToProtocol:@protocol(SPMySQLConnectionDelegate)]) {
             self.connectionService.mySQLDelegate = (id<SPMySQLConnectionDelegate>)dbDocument;
         }
+
+        // Replace the legacy tabbed XIB form with the SwiftUI connection form
+        // (Connection Method + Authentication Method dropdowns, no tabs).
+        self.formBridge = [[SAConnectionFormBridge alloc] initWithController:self];
+        if (connectionDetailsScrollView) {
+            [self.formBridge installReplacing:connectionDetailsScrollView below:connectionInstructionsTextField];
+        }
+        [self syncFormFromController];
+        [self _syncFormBridgeActionStateWithStatus:nil canCancel:NO];
 
         initComplete = YES;
 

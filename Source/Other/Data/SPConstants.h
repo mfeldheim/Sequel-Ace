@@ -558,6 +558,9 @@ extern NSString *SPFavoriteSSLCACertFileLocationEnabledKey;
 extern NSString *SPFavoriteSSLCACertFileLocationKey;
 extern NSString *SPFavoriteUseCompressionKey;
 
+// Authentication Method
+extern NSString *SPFavoriteAuthMethodKey;
+
 // AWS IAM Authentication
 extern NSString *SPFavoriteUseAWSIAMAuthKey;
 extern NSString *SPFavoriteAWSRegionKey;

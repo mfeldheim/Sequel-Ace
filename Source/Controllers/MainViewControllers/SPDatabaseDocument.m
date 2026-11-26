@@ -2274,13 +2274,26 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                     ([[connectionController awsProfile] length]) ? [connectionController awsProfile] : @"default",
                     ([[connectionController awsRegion] length]) ? [connectionController awsRegion] : @"auto"];
             break;
-        case SPSSHTunnelConnection:
-            return [NSString stringWithFormat:@"%@@%@%@&SSH&%@@%@:%@",
+        case SPSSHTunnelConnection: {
+            NSMutableString *cid = [NSMutableString stringWithFormat:@"%@@%@%@&SSH&%@@%@:%@",
                     ([connectionController user] && [[connectionController user] length]) ? [connectionController user] : @"anonymous",
                     [connectionController host] ? [connectionController host] : @"", port,
                     ([connectionController sshUser] && [[connectionController sshUser] length]) ? [connectionController sshUser] : @"anonymous",
                     [connectionController sshHost] ? [connectionController sshHost] : @"",
                     ([[connectionController sshPort] length]) ? [connectionController sshPort] : @"22"];
+            if ([connectionController usesAWSIAMAuth]) {
+                [cid appendFormat:@"&AWSIAM&%@&%@",
+                    ([[connectionController awsProfile] length]) ? [connectionController awsProfile] : @"default",
+                    ([[connectionController awsRegion] length]) ? [connectionController awsRegion] : @"auto"];
+            } else if ([connectionController usesVaultAuth]) {
+                [cid appendFormat:@"&Vault:%@:%@:%@/%@",
+                    [connectionController vaultHost] ? [connectionController vaultHost] : @"",
+                    ([[connectionController vaultPort] length]) ? [connectionController vaultPort] : @"443",
+                    [connectionController vaultOIDCMount] ? [connectionController vaultOIDCMount] : @"",
+                    [connectionController vaultCredentialsPath] ? [connectionController vaultCredentialsPath] : @""];
+            }
+            return cid;
+        }
         case SPVaultConnection:
             return [NSString stringWithFormat:@"%@@%@%@&Vault:%@:%@:%@/%@",
                     ([connectionController user] && [[connectionController user] length]) ? [connectionController user] : @"anonymous",
@@ -3638,6 +3651,18 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                 connectionType = @"SPTCPIPConnection";
         }
         [connection setObject:connectionType forKey:@"type"];
+        [connection setObject:[NSNumber numberWithInteger:[connectionController authMethod]] forKey:@"auth_method"];
+        if ([connectionController usesAWSIAMAuth]) {
+            [connection setObject:@YES forKey:@"useAWSIAMAuth"];
+            if ([[connectionController awsProfile] length]) [connection setObject:[connectionController awsProfile] forKey:@"aws_profile"];
+            if ([[connectionController awsRegion] length]) [connection setObject:[connectionController awsRegion] forKey:@"aws_region"];
+        }
+        if ([connectionController usesVaultAuth]) {
+            if ([[connectionController vaultHost] length]) [connection setObject:[connectionController vaultHost] forKey:@"vault_host"];
+            if ([[connectionController vaultPort] length]) [connection setObject:[connectionController vaultPort] forKey:@"vault_port"];
+            if ([[connectionController vaultOIDCMount] length]) [connection setObject:[connectionController vaultOIDCMount] forKey:@"vault_oidc_mount"];
+            if ([[connectionController vaultCredentialsPath] length]) [connection setObject:[connectionController vaultCredentialsPath] forKey:@"vault_credentials_path"];
+        }
 
         NSString *kcid = [connectionController connectionKeychainID];
         if ([kcid length]) [connection setObject:kcid forKey:@"kcid"];
@@ -3648,12 +3673,14 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         if([connectionController port] && [[connectionController port] length]) [connection setObject:[NSNumber numberWithInteger:[[connectionController port] integerValue]] forKey:@"port"];
         if([[self database] length])                                            [connection setObject:[self database] forKey:@"database"];
 
-        if (includePasswords && [connectionController type] != SPVaultConnection) {
-            NSString *pw = [connectionController keychainPassword];
-            if (!pw) pw = [connectionController password];
-            if (pw) [connection setObject:pw forKey:@"password"];
+        if (includePasswords) {
+            if (![connectionController usesVaultAuth] && ![connectionController usesAWSIAMAuth]) {
+                NSString *pw = [connectionController keychainPassword];
+                if (!pw) pw = [connectionController password];
+                if (pw) [connection setObject:pw forKey:@"password"];
+            }
 
-            if ([connectionController type] == SPSSHTunnelConnection) {
+            if ([connectionController usesSSHTunnel]) {
                 NSString *sshpw = [self keychainPasswordForSSHConnection:nil];
                 if(![sshpw length]) sshpw = [connectionController sshPassword];
                 [connection setObject:(sshpw ? sshpw : @"") forKey:@"ssh_password"];
@@ -3801,7 +3828,19 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         else                                                            connectionType = SPTCPIPConnection;
 
         [connectionController setType:connectionType];
-        [connectionController setUseAWSIAMAuth:(connectionType == SPAWSIAMConnection ? NSControlStateValueOn : NSControlStateValueOff)];
+        NSInteger resolvedAuthMethod = SAAuthMethodPassword;
+        if ([connection objectForKey:@"auth_method"]) {
+            resolvedAuthMethod = [[connection objectForKey:@"auth_method"] integerValue];
+        } else if (connectionType == SPAWSIAMConnection || [[connection objectForKey:@"useAWSIAMAuth"] boolValue]) {
+            resolvedAuthMethod = SAAuthMethodAwsIAM;
+        } else if (connectionType == SPVaultConnection) {
+            resolvedAuthMethod = SAAuthMethodVault;
+        }
+        if (connectionType == SPSocketConnection) {
+            resolvedAuthMethod = SAAuthMethodPassword;
+        }
+        [connectionController setAuthMethod:resolvedAuthMethod];
+        [connectionController setUseAWSIAMAuth:(resolvedAuthMethod == SAAuthMethodAwsIAM ? NSControlStateValueOn : NSControlStateValueOff)];
         [connectionController resizeTabViewToConnectionType:connectionType animating:NO];
     }
 
@@ -3879,6 +3918,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     // Restore the selected database if saved
     if ([connection objectForKey:@"database"]) [connectionController setDatabase:[connection objectForKey:@"database"]];
+
+    [connectionController syncFormFromController];
 
     // Store session details - if provided - for later setting once the connection is established
     if ([stateDetails objectForKey:@"session"]) {
@@ -5955,7 +5996,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  */
 - (NSString *)credentialErrorMessageForConnection:(SPMySQLConnection *)connection
 {
-    if ([connectionController type] != SPAWSIAMConnection) return nil;
+    if (![connectionController usesAWSIAMAuth]) return nil;
 
     return [[connectionController lastAWSIAMTokenErrorForConnection:connection] localizedDescription];
 }
@@ -6006,7 +6047,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         // Display the connection error sheet and wait for the return code
         SAConnectionLostSheetCopy *sheetCopy = [SAConnectionLostSheetCopy sheetCopyForAWSIAMTokenError:[connectionController lastAWSIAMTokenErrorForConnection:connection]
-                                                                                   isAWSIAMConnection:([connectionController type] == SPAWSIAMConnection)
+                                                                                   isAWSIAMConnection:[connectionController usesAWSIAMAuth]
                                                                                            awsProfile:[connectionController awsProfile]];
 
         connectionErrorCode = [SAConnectionLostAlert runModalForWindow:[self.parentWindowController window] copy:sheetCopy]

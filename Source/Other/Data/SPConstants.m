@@ -375,6 +375,9 @@ NSString *SPFavoriteSSLCACertFileLocationEnabledKey      = @"sslCACertFileLocati
 NSString *SPFavoriteSSLCACertFileLocationKey             = @"sslCACertFileLocation";
 NSString *SPFavoriteUseCompressionKey                    = @"useCompression";
 
+// Authentication Method
+NSString *SPFavoriteAuthMethodKey                        = @"authMethod";
+
 // AWS IAM Authentication
 NSString *SPFavoriteUseAWSIAMAuthKey                     = @"useAWSIAMAuth";
 NSString *SPFavoriteAWSRegionKey                         = @"awsRegion";
